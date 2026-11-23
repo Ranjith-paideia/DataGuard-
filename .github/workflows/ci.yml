@@ -1,0 +1,53 @@
+name: DataGuard CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    name: Build, Lint & Typecheck
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Verify TypeScript Types
+        run: npm run typecheck
+
+      # Optional / Enterprise Self-Hosted Runner or Managed SQL Server Step:
+      # In an environment with an accessible MS SQL Server instance (e.g., self-hosted runner,
+      # Azure SQL, or managed Windows runner), configure repository secrets and uncomment below:
+      #
+      # - name: Run Microservices Contract & SQL Integrity Tests
+      #   env:
+      #     API_BASE_URL: http://localhost:3001
+      #     SQL_SERVER: ${{ secrets.SQL_SERVER }}
+      #     SQL_PORT: ${{ secrets.SQL_PORT || '1433' }}
+      #     SQL_USER: ${{ secrets.SQL_USER }}
+      #     SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
+      #     SQL_DATABASE: ${{ secrets.SQL_DATABASE || 'DataGuardTest' }}
+      #     API_LATENCY_THRESHOLD_MS: 500
+      #   run: |
+      #     npx playwright install --with-deps
+      #     npm test
+      #
+      # - name: Upload Playwright Test Report
+      #   if: always()
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: playwright-report
+      #     path: playwright-report/
+      #     retention-days: 14

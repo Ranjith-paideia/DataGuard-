@@ -1,0 +1,18 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "order.schema.json",
+  "title": "Order",
+  "description": "Strict schema matching the API response for an individual Order.",
+  "type": "object",
+  "properties": {
+    "id": { "type": "integer" },
+    "user_id": { "type": "integer" },
+    "item_name": { "type": "string", "minLength": 1, "maxLength": 150 },
+    "quantity": { "type": "integer", "minimum": 1, "maximum": 1000 },
+    "amount": { "type": "number", "exclusiveMinimum": 0, "maximum": 100000 },
+    "status": { "type": "string", "enum": ["PENDING", "CONFIRMED", "CANCELLED"] },
+    "created_at": { "type": "string" }
+  },
+  "required": ["id", "user_id", "item_name", "quantity", "amount", "status", "created_at"],
+  "additionalProperties": false
+}

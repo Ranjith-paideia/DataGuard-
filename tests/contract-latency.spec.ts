@@ -1,17 +1,27 @@
 import { test, expect } from '@playwright/test';
 import { ContractClient } from '../src/api/contractClient';
-import { executeQuery, closePool } from '../src/db/sqlServerClient';
+import { closeDbPool, getAuditLogsByOrderId, deleteOrdersByItemName } from '../src/db/dbClient';
 import {
   OrderSchema,
   OrderListSchema,
   ErrorResponseSchema,
 } from '../src/schemas/order.schema';
+import Ajv from 'ajv';
+import addFormats from 'ajv-formats';
+import orderJsonSchema from '../contracts/order.schema.json';
+import orderListJsonSchema from '../contracts/order-list.schema.json';
 
 const ADMIN_TOKEN = 'valid-admin-token';
 const LATENCY_THRESHOLD_MS = parseInt(
   process.env.API_LATENCY_THRESHOLD_MS || '500',
   10
 );
+
+// Compile JSON Schema validators using Ajv
+const ajv = new Ajv({ allErrors: true, strict: false });
+addFormats(ajv);
+const validateOrder = ajv.compile(orderJsonSchema);
+const validateOrderList = ajv.compile(orderListJsonSchema);
 
 test.describe('Contract & Latency Benchmark Suite', () => {
   let client: ContractClient;
@@ -26,32 +36,32 @@ test.describe('Contract & Latency Benchmark Suite', () => {
     while (createdOrderIds.length > 0) {
       const id = createdOrderIds.pop();
       if (id) {
-        await executeQuery(
-          'DELETE FROM dbo.audit_logs WHERE entity_type = @entityType AND entity_id = @id',
-          { entityType: 'ORDER', id }
-        );
-        await client.delete(`/api/orders/${id}`, { token: ADMIN_TOKEN });
+        await deleteOrdersByItemName('Latency & Contract Benchmark Item');
       }
     }
   });
 
   test.afterAll(async () => {
-    await closePool();
+    await closeDbPool();
   });
 
-  test('GET /api/orders complies with OrderListSchema and satisfies latency threshold', async () => {
+  test('GET /api/orders complies with OrderListSchema, JSON Schema, and satisfies latency threshold', async () => {
     const response = await client.get('/api/orders', { token: ADMIN_TOKEN });
 
     // Assert status and latency
     expect(response.status).toBe(200);
     expect(response.latencyMs).toBeLessThanOrEqual(LATENCY_THRESHOLD_MS);
 
-    // Validate payload strictly against Zod contract
+    // Validate payload against Zod contract
     const parseResult = OrderListSchema.safeParse(response.body);
     expect(parseResult.success).toBe(true);
+
+    // Validate payload against JSON Schema contract
+    const jsonSchemaValid = validateOrderList(response.body);
+    expect(jsonSchemaValid, `JSON Schema errors: ${JSON.stringify(validateOrderList.errors)}`).toBe(true);
   });
 
-  test('POST /api/orders complies with OrderSchema and satisfies latency threshold', async () => {
+  test('POST /api/orders complies with OrderSchema, JSON Schema, and satisfies latency threshold', async () => {
     const payload = {
       item_name: 'Latency & Contract Benchmark Item',
       quantity: 5,
@@ -66,9 +76,13 @@ test.describe('Contract & Latency Benchmark Suite', () => {
     expect(response.status).toBe(201);
     expect(response.latencyMs).toBeLessThanOrEqual(LATENCY_THRESHOLD_MS);
 
-    // Validate created order structure
+    // Validate created order against Zod
     const parseResult = OrderSchema.safeParse(response.body);
     expect(parseResult.success).toBe(true);
+
+    // Validate created order against JSON Schema
+    const jsonSchemaValid = validateOrder(response.body);
+    expect(jsonSchemaValid, `JSON Schema errors: ${JSON.stringify(validateOrder.errors)}`).toBe(true);
 
     if (parseResult.success) {
       createdOrderIds.push(parseResult.data.id);

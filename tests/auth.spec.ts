@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { ContractClient } from '../src/api/contractClient';
-import { closePool } from '../src/db/sqlServerClient';
+import { closeDbPool } from '../src/db/dbClient';
 
 const ADMIN_TOKEN = 'valid-admin-token';
 const VIEWER_TOKEN = 'valid-viewer-token';
@@ -14,7 +14,7 @@ test.describe('Authentication & Authorization Suite', () => {
   });
 
   test.afterAll(async () => {
-    await closePool();
+    await closeDbPool();
   });
 
   test('Missing Authorization header returns 401 Unauthorized', async () => {

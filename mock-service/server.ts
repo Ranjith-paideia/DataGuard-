@@ -1,11 +1,21 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
-import { getPool, sql } from '../src/db/sqlServerClient';
 import {
   CreateOrderInputSchema,
   UpdateOrderStatusInputSchema,
   Order,
 } from '../src/schemas/order.schema';
+import {
+  checkDbHealth,
+  findUserByToken,
+  getAllOrders,
+  getOrderById,
+  createOrderWithAudit,
+  updateOrderStatusWithAudit,
+  deleteOrderById,
+  formatOrderRow,
+  DbUser,
+} from '../src/db/dbClient';
 
 export interface AuthenticatedUser {
   id: number;
@@ -51,7 +61,7 @@ function parseIdParam(param: string | string[] | undefined): number | null {
 /**
  * Authentication Middleware:
  * Inspects Authorization: Bearer <token>
- * Queries dbo.users using parameterized T-SQL to find matching active user
+ * Queries users table using dialect-safe dbClient to find matching active user
  */
 async function authenticate(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
@@ -65,19 +75,12 @@ async function authenticate(req: Request, res: Response, next: NextFunction) {
   }
 
   try {
-    const pool = await getPool();
-    const result = await pool
-      .request()
-      .input('token', sql.NVarChar(255), token)
-      .query<AuthenticatedUser>(
-        'SELECT TOP 1 id, email, role, api_token FROM dbo.users WHERE api_token = @token'
-      );
-
-    if (result.recordset.length === 0) {
+    const user = await findUserByToken(token);
+    if (!user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
-    req.user = result.recordset[0];
+    req.user = user as AuthenticatedUser;
     next();
   } catch (error) {
     console.error('Authentication error:', error);
@@ -96,24 +99,6 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-/**
- * Normalizes SQL Server order record to match strict Order contract
- */
-function formatOrder(row: any): Order {
-  return {
-    id: row.id,
-    user_id: row.user_id,
-    item_name: row.item_name,
-    quantity: row.quantity,
-    amount: Number(row.amount),
-    status: row.status,
-    created_at:
-      row.created_at instanceof Date
-        ? row.created_at.toISOString()
-        : String(row.created_at),
-  };
-}
-
 // ----------------------------------------------------------------------------
 // Endpoints
 // ----------------------------------------------------------------------------
@@ -124,8 +109,7 @@ function formatOrder(row: any): Order {
  */
 app.get('/health', async (_req: Request, res: Response) => {
   try {
-    const pool = await getPool();
-    await pool.request().query('SELECT 1 AS ok');
+    await checkDbHealth();
     return res.status(200).json({ status: 'ok', db: 'connected' });
   } catch (error) {
     console.error('Database health check failed:', error);
@@ -139,14 +123,8 @@ app.get('/health', async (_req: Request, res: Response) => {
  */
 app.get('/api/orders', authenticate, async (_req: Request, res: Response) => {
   try {
-    const pool = await getPool();
-    const result = await pool
-      .request()
-      .query(
-        'SELECT id, user_id, item_name, quantity, amount, status, created_at FROM dbo.orders ORDER BY id DESC'
-      );
-
-    const orders = result.recordset.map(formatOrder);
+    const rows = await getAllOrders();
+    const orders = rows.map(formatOrderRow);
     return res.status(200).json(orders);
   } catch (error) {
     console.error('Failed to fetch orders:', error);
@@ -165,19 +143,11 @@ app.get('/api/orders/:id', authenticate, async (req: Request, res: Response) => 
   }
 
   try {
-    const pool = await getPool();
-    const result = await pool
-      .request()
-      .input('id', sql.Int, orderId)
-      .query(
-        'SELECT TOP 1 id, user_id, item_name, quantity, amount, status, created_at FROM dbo.orders WHERE id = @id'
-      );
-
-    if (result.recordset.length === 0) {
+    const row = await getOrderById(orderId);
+    if (!row) {
       return res.status(404).json({ error: 'Order not found' });
     }
-
-    return res.status(200).json(formatOrder(result.recordset[0]));
+    return res.status(200).json(formatOrderRow(row));
   } catch (error) {
     console.error(`Failed to fetch order ${orderId}:`, error);
     return res.status(500).json({ error: 'Failed to retrieve order' });
@@ -187,7 +157,7 @@ app.get('/api/orders/:id', authenticate, async (req: Request, res: Response) => 
 /**
  * POST /api/orders
  * Auth required + admin role. Validates body with Zod schema.
- * Atomically writes to dbo.orders and logs action in dbo.audit_logs.
+ * Atomically writes to orders and logs action in audit_logs.
  */
 app.post(
   '/api/orders',
@@ -206,35 +176,13 @@ app.post(
     const userId = req.user!.id;
 
     try {
-      const pool = await getPool();
-
-      // Parameterized insert with OUTPUT clause for atomic record creation
-      const insertResult = await pool
-        .request()
-        .input('userId', sql.Int, userId)
-        .input('itemName', sql.NVarChar(150), item_name)
-        .input('quantity', sql.Int, quantity)
-        .input('amount', sql.Decimal(10, 2), amount)
-        .query(
-          `INSERT INTO dbo.orders (user_id, item_name, quantity, amount, status)
-           OUTPUT INSERTED.id, INSERTED.user_id, INSERTED.item_name, INSERTED.quantity, INSERTED.amount, INSERTED.status, INSERTED.created_at
-           VALUES (@userId, @itemName, @quantity, @amount, 'PENDING');`
-        );
-
-      const createdOrder = insertResult.recordset[0];
-
-      // Audit log entry
-      await pool
-        .request()
-        .input('entityType', sql.NVarChar(50), 'ORDER')
-        .input('entityId', sql.Int, createdOrder.id)
-        .input('action', sql.NVarChar(50), 'CREATED')
-        .query(
-          `INSERT INTO dbo.audit_logs (entity_type, entity_id, action)
-           VALUES (@entityType, @entityId, @action);`
-        );
-
-      return res.status(201).json(formatOrder(createdOrder));
+      const createdOrder = await createOrderWithAudit({
+        user_id: userId,
+        item_name,
+        quantity,
+        amount,
+      });
+      return res.status(201).json(formatOrderRow(createdOrder));
     } catch (error) {
       console.error('Failed to create order:', error);
       return res.status(500).json({ error: 'Failed to create order' });
@@ -245,7 +193,7 @@ app.post(
 /**
  * PATCH /api/orders/:id/status
  * Auth required + admin role. Validates positive integer :id and status enum.
- * Updates order status and logs STATUS_UPDATED in dbo.audit_logs.
+ * Updates order status and logs STATUS_UPDATED in audit_logs.
  */
 app.patch(
   '/api/orders/:id/status',
@@ -268,42 +216,11 @@ app.patch(
     const { status } = validation.data;
 
     try {
-      const pool = await getPool();
-
-      // Check if order exists first
-      const checkResult = await pool
-        .request()
-        .input('id', sql.Int, orderId)
-        .query('SELECT TOP 1 id FROM dbo.orders WHERE id = @id');
-
-      if (checkResult.recordset.length === 0) {
+      const updatedOrder = await updateOrderStatusWithAudit(orderId, status);
+      if (!updatedOrder) {
         return res.status(404).json({ error: 'Order not found' });
       }
-
-      // Update status and return updated record
-      const updateResult = await pool
-        .request()
-        .input('id', sql.Int, orderId)
-        .input('status', sql.NVarChar(30), status)
-        .query(
-          `UPDATE dbo.orders
-           SET status = @status
-           OUTPUT INSERTED.id, INSERTED.user_id, INSERTED.item_name, INSERTED.quantity, INSERTED.amount, INSERTED.status, INSERTED.created_at
-           WHERE id = @id;`
-        );
-
-      // Audit log entry
-      await pool
-        .request()
-        .input('entityType', sql.NVarChar(50), 'ORDER')
-        .input('entityId', sql.Int, orderId)
-        .input('action', sql.NVarChar(50), 'STATUS_UPDATED')
-        .query(
-          `INSERT INTO dbo.audit_logs (entity_type, entity_id, action)
-           VALUES (@entityType, @entityId, @action);`
-        );
-
-      return res.status(200).json(formatOrder(updateResult.recordset[0]));
+      return res.status(200).json(formatOrderRow(updatedOrder));
     } catch (error) {
       console.error(`Failed to update order ${orderId}:`, error);
       return res.status(500).json({ error: 'Failed to update order status' });
@@ -326,16 +243,10 @@ app.delete(
     }
 
     try {
-      const pool = await getPool();
-      const deleteResult = await pool
-        .request()
-        .input('id', sql.Int, orderId)
-        .query('DELETE FROM dbo.orders WHERE id = @id');
-
-      if (deleteResult.rowsAffected[0] === 0) {
+      const deleted = await deleteOrderById(orderId);
+      if (!deleted) {
         return res.status(404).json({ error: 'Order not found' });
       }
-
       return res.status(200).json({ deleted: true, id: orderId });
     } catch (error) {
       console.error(`Failed to delete order ${orderId}:`, error);

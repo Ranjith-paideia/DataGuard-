@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { ContractClient } from '../src/api/contractClient';
-import { executeQuery, closePool } from '../src/db/sqlServerClient';
+import { closeDbPool } from '../src/db/dbClient';
+import { executeQuery } from '../src/db/sqlServerClient';
 
 const ADMIN_TOKEN = 'valid-admin-token';
 
@@ -12,7 +13,7 @@ test.describe('Boundary & Negative Test Suite with SQL Integrity Guard', () => {
   });
 
   test.afterAll(async () => {
-    await closePool();
+    await closeDbPool();
   });
 
   test('POST /api/orders boundary validation: empty item_name returns 422', async () => {

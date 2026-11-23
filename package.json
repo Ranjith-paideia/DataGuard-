@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start:mock": "tsx mock-service/server.ts",
+    "db:setup:mysql": "tsx scripts/setup-mysql.ts",
     "test": "playwright test",
+    "test:dataguard": "playwright test --project=dataguard-local",
+    "test:parabank": "playwright test --project=parabank",
     "test:report": "playwright show-report",
     "typecheck": "tsc --noEmit"
   },
@@ -26,6 +29,9 @@
     "@types/express": "^5.0.6",
     "@types/mssql": "^12.3.0",
     "@types/node": "^26.6.6",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "mysql2": "^3.24.6",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   },

@@ -61,6 +61,8 @@ export async function executeQuery<T = any>(
         request.input(key, sql.Bit, value);
       } else if (value instanceof Date) {
         request.input(key, sql.DateTime2, value);
+      } else if (value === null || value === undefined) {
+        request.input(key, sql.NVarChar, null);
       } else {
         request.input(key, value);
       }

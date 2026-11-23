@@ -70,6 +70,10 @@ export class ContractClient {
     return this.send<T>('PATCH', path, options);
   }
 
+  put<T = any>(path: string, options?: RequestOptions): Promise<ApiResponse<T>> {
+    return this.send<T>('PUT', path, options);
+  }
+
   delete<T = any>(path: string, options?: RequestOptions): Promise<ApiResponse<T>> {
     return this.send<T>('DELETE', path, options);
   }

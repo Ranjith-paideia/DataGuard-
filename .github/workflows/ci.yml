@@ -7,9 +7,21 @@ on:
     branches: [ main ]
 
 jobs:
-  validate:
-    name: Build, Lint & Typecheck
+  dataguard-mysql-integrity:
+    name: DataGuard MySQL Integrity Suite
     runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: rootpassword
+          MYSQL_DATABASE: dataguard_test
+          MYSQL_USER: dataguard_user
+          MYSQL_PASSWORD: DataGuard@123
+        ports:
+          - 3306:3306
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=5
 
     steps:
       - name: Checkout Repository
@@ -27,27 +39,64 @@ jobs:
       - name: Verify TypeScript Types
         run: npm run typecheck
 
-      # Optional / Enterprise Self-Hosted Runner or Managed SQL Server Step:
-      # In an environment with an accessible MS SQL Server instance (e.g., self-hosted runner,
-      # Azure SQL, or managed Windows runner), configure repository secrets and uncomment below:
-      #
-      # - name: Run Microservices Contract & SQL Integrity Tests
-      #   env:
-      #     API_BASE_URL: http://localhost:3001
-      #     SQL_SERVER: ${{ secrets.SQL_SERVER }}
-      #     SQL_PORT: ${{ secrets.SQL_PORT || '1433' }}
-      #     SQL_USER: ${{ secrets.SQL_USER }}
-      #     SQL_PASSWORD: ${{ secrets.SQL_PASSWORD }}
-      #     SQL_DATABASE: ${{ secrets.SQL_DATABASE || 'DataGuardTest' }}
-      #     API_LATENCY_THRESHOLD_MS: 500
-      #   run: |
-      #     npx playwright install --with-deps
-      #     npm test
-      #
-      # - name: Upload Playwright Test Report
-      #   if: always()
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: playwright-report
-      #     path: playwright-report/
-      #     retention-days: 14
+      - name: Setup MySQL Schema & Seed
+        env:
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_USER: dataguard_user
+          MYSQL_PASSWORD: DataGuard@123
+          MYSQL_DATABASE: dataguard_test
+        run: npm run db:setup:mysql
+
+      - name: Run Microservices Contract & MySQL Integrity Tests
+        env:
+          API_BASE_URL: http://localhost:3001
+          DB_DIALECT: mysql
+          MYSQL_HOST: 127.0.0.1
+          MYSQL_PORT: 3306
+          MYSQL_USER: dataguard_user
+          MYSQL_PASSWORD: DataGuard@123
+          MYSQL_DATABASE: dataguard_test
+          API_LATENCY_THRESHOLD_MS: 500
+        run: npm run test:dataguard -- --reporter=list
+
+      - name: Upload Playwright Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-dataguard
+          path: playwright-report/
+          retention-days: 14
+
+  parabank-contract:
+    name: ParaBank API Contract Suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Dependencies
+        run: npm ci
+
+      - name: Run ParaBank API Tests
+        env:
+          PARABANK_BASE_URL: https://parabank.parasoft.com/parabank/services/bank
+          PARABANK_USER: john
+          PARABANK_PASSWORD: demo
+          PARABANK_LATENCY_THRESHOLD_MS: 5000
+        run: npm run test:parabank -- --reporter=list
+
+      - name: Upload Playwright Test Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-parabank
+          path: playwright-report/
+          retention-days: 14
